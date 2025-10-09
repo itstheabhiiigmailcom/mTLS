@@ -1,0 +1,4 @@
+cryptography>=40.0.0
+fastapi
+uvicorn
+httpx
