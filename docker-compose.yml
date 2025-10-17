@@ -1,0 +1,25 @@
+services:
+  pki-server:
+    build: .
+    container_name: pki-server
+    restart: unless-stopped
+    ports:
+      - "8443:8443"
+    volumes:
+      - ./pki:/app/pki:rw
+      - ./logs:/app/logs
+    environment:
+      - TZ=UTC
+      - ADMIN_API_KEYS=backend-secret-key,admin-secret-key
+      - PKI_SERVER_HOST=0.0.0.0
+      - PKI_SERVER_PORT=8443
+    networks:
+      - pki-network
+
+networks:
+  pki-network:
+    driver: bridge
+
+volumes:
+  pki_data:
+    driver: local

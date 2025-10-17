@@ -22,26 +22,36 @@ def setup_pki():
     
     return root_key, root_cert, inter_key, inter_cert
 
-def create_entity_certificate(entity_name, inter_key, inter_cert, san_list=None):
+def create_entity_certificate(entity_name, inter_key, inter_cert, validity_seconds=120, san_list=None):
     """Create key and certificate for an entity (broker, server, client)"""
+
+    key_path = PKI_DIR / f"{entity_name}.key.pem"
+    cert_path = PKI_DIR / f"{entity_name}.cert.pem"
+
+    # Delete old key/cert if exists
+    if key_path.exists():
+        key_path.unlink()
+        print(f"Old key deleted: {key_path}")
+    if cert_path.exists():
+        cert_path.unlink()
+        print(f"Old certificate deleted: {cert_path}")
+
     # Generate private key
     key = generate_private_key()
-    key_path = PKI_DIR / f"{entity_name}.key.pem"
     write_key_to_pem(key, str(key_path))
-    
+
     # Create CSR
     csr = create_csr(key, common_name=entity_name, san_list=san_list)
     csr_pem = csr.public_bytes(encoding=serialization.Encoding.PEM)
-    
-    # Sign CSR with intermediate CA
-    cert = sign_csr(inter_key, inter_cert, csr_pem)
-    
+
+    # Sign CSR with intermediate CA (validity in minutes)
+    cert = sign_csr(inter_key, inter_cert, csr_pem, validity_seconds=validity_seconds)
+
     # Write certificate
-    cert_path = PKI_DIR / f"{entity_name}.cert.pem"
     with open(cert_path, "wb") as f:
         f.write(cert.public_bytes(serialization.Encoding.PEM))
-    
-    print(f"{entity_name} certificate created: {cert_path}")
+
+    print(f"{entity_name} certificate created: {cert_path} (valid for {validity_seconds} minutes)")
     return cert
 
 if __name__ == "__main__":
@@ -49,16 +59,16 @@ if __name__ == "__main__":
     root_key, root_cert, inter_key, inter_cert = setup_pki()
     
     # Create certificates with actual IP addresses and hostnames
-    create_entity_certificate("broker", inter_key, inter_cert, 
+    create_entity_certificate("broker", inter_key, inter_cert, validity_seconds=180,
                              san_list=["192.168.0.222", "localhost", "127.0.0.1", "broker", "mosquitto"])
     
-    create_entity_certificate("server", inter_key, inter_cert,
+    create_entity_certificate("server", inter_key, inter_cert, validity_seconds=3600,
                              san_list=["192.168.0.222", "localhost", "127.0.0.1", "server"])
     
-    create_entity_certificate("robot01", inter_key, inter_cert,
+    create_entity_certificate("robot01", inter_key, inter_cert,  validity_seconds=180,
                              san_list=["raspberrypi.local", "robot01"])
     
-    print("\n✅ Generated essential files for mTLS with real IPs/hostnames:")
+    print("\n Generated essential files for mTLS with real IPs/hostnames:")
     print("   - broker.key.pem, broker.cert.pem (for 192.168.0.222)")
     print("   - server.key.pem, server.cert.pem (for 192.168.0.222)") 
     print("   - robot01.key.pem, robot01.cert.pem (for raspberrypi.local)")

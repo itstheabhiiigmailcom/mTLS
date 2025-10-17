@@ -14,13 +14,13 @@ def test_mqtt_security():
         import time
         time.sleep(2)
         if client1.is_connected():
-            print("❌ INSECURE: Connected without TLS!")
+            print("INSECURE: Connected without TLS!")
         else:
-            print("✅ SECURE: Connection failed without TLS (expected)")
+            print("SECURE: Connection failed without TLS (expected)")
         client1.loop_stop()
         client1.disconnect()
     except Exception as e:
-        print(f"✅ SECURE: Connection failed - {e}")
+        print(f"SECURE: Connection failed - {e}")
     
     print("\n" + "-" * 50)
     
@@ -35,20 +35,20 @@ def test_mqtt_security():
         client2.loop_start()
         time.sleep(2)
         if client2.is_connected():
-            print("❌ INSECURE: Connected with TLS but no client cert!")
+            print("INSECURE: Connected with TLS but no client cert!")
         else:
-            print("✅ SECURE: Connection failed without client cert (expected)")
+            print("SECURE: Connection failed without client cert (expected)")
         client2.loop_stop()
         client2.disconnect()
     except Exception as e:
-        print(f"✅ SECURE: Connection failed - {e}")
+        print(f"SECURE: Connection failed - {e}")
     
     print("\n" + "-" * 50)
     
     # Test 3: With full mTLS (should WORK if you had certs on Windows)
     print("3. Testing WITH full mTLS (client certificates)...")
     print("   [This would work if certificates were available on Windows]")
-    print("   ✅ Your server-side tests prove mTLS is working!")
+    print("   Your server-side tests prove mTLS is working!")
 
 if __name__ == "__main__":
     test_mqtt_security()
