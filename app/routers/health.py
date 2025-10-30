@@ -20,7 +20,7 @@ async def health_check():
             "intermediate_ca_exists": (pki_dir / "intermediateCA.crt.pem").exists(),
             "crl_exists": (pki_dir / "crl" / "intermediate.crl.pem").exists(),
             "certificate_database_exists": (pki_dir / "certificate_database.json").exists(),
-            "timestamp": datetime.datetime.utcnow().isoformat()
+            "timestamp": datetime.utcnow().isoformat()
         }
         return status
     except Exception as e:

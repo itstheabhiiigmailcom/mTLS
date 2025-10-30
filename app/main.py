@@ -8,7 +8,7 @@ from create_and_sign import setup_pki
 
 
 # Import routers
-from routers import health, certificates, crl, validation, issuance
+from routers import health, certificates, crl, validation, issuance, renew_certificate
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -35,6 +35,7 @@ app.include_router(certificates.router, prefix="/api/v1")
 app.include_router(crl.router, prefix="/api/v1")
 app.include_router(validation.router, prefix="/api/v1")
 app.include_router(issuance.router, prefix="/api/v1")
+app.include_router(renew_certificate.router, prefix="/api/v1")
 
 @app.get("/")
 async def root():

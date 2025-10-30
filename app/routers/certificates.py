@@ -8,7 +8,7 @@ from ca.ca_manager import (
     sign_csr, revoke_certificate, load_cert_database, 
     track_certificate, is_certificate_revoked, load_intermediate_ca
 )
-import datetime
+from datetime import datetime, timezone
 import os
 import logging
 from pathlib import Path
@@ -57,7 +57,7 @@ async def renew_certificate(
                 current_cert = x509.load_pem_x509_certificate(current_cert_pem.encode('utf-8'), default_backend())
                 
                 # Only warn about expiry/revocation but don't block renewal
-                if current_cert.not_valid_after < datetime.datetime.utcnow():
+                if current_cert.not_valid_after_utc < datetime.now(timezone.utc):
                     logger.warning(f"Current certificate for {robot_id} has expired - allowing renewal")
                 
                 if is_certificate_revoked(current_cert.serial_number):
@@ -73,8 +73,7 @@ async def renew_certificate(
                 inter_key, 
                 inter_cert, 
                 csr_pem.encode('utf-8'),  # Convert string to bytes
-                validity_seconds=10*60,           # Fixed: 90 days, not 10 minutes
-                is_server_cert=False
+                validity_seconds=30 * 60
             )
         except Exception as e:
             logger.error(f"Failed to sign CSR: {e}")
@@ -95,7 +94,7 @@ async def renew_certificate(
             "success": True,
             "message": "Certificate renewed successfully",
             "certificate": cert_pem,
-            "expires_at": new_cert.not_valid_after_utc.isoformat() if hasattr(new_cert, 'not_valid_after_utc') else new_cert.not_valid_after.isoformat(),
+            "expires_at": new_cert.not_valid_after_utc.isoformat() if hasattr(new_cert, 'not_valid_after_utc') else new_cert.not_valid_after_utc.isoformat(),
             "serial_number": str(new_cert.serial_number)
         }
         
@@ -157,7 +156,7 @@ async def revoke_certificate_api(
             "success": True,
             "message": f"Certificate revoked for {entity_name}",
             "serial_number": str(cert.serial_number),
-            "revocation_date": datetime.datetime.utcnow().isoformat(),
+            "revocation_date": datetime.utcnow().isoformat(),
             "reason": reason_str
         }
         

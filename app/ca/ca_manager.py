@@ -3,9 +3,10 @@ from cryptography import x509
 from cryptography.x509.oid import NameOID
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
-import datetime
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 import json
+from cryptography.hazmat.backends import default_backend
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 PKI_DIR = BASE_DIR / "pki"
@@ -18,85 +19,80 @@ CRL_DIR.mkdir(exist_ok=True)
 # -----------------------------
 # CRL Management
 # -----------------------------
+
 def create_crl(issuer_key, issuer_cert, revoked_certs=None):
     """Create Certificate Revocation List"""
     if revoked_certs is None:
         revoked_certs = []
-    
-    builder = x509.CertificateRevocationListBuilder()
-    builder = builder.issuer_name(issuer_cert.subject)
-    builder = builder.last_update(datetime.datetime.utcnow())
-    builder = builder.next_update(datetime.datetime.utcnow() + datetime.timedelta(days=7))
-    
-    # Add revoked certificates
+
+    now = datetime.now(timezone.utc)
+    builder = (
+        x509.CertificateRevocationListBuilder()
+        .issuer_name(issuer_cert.subject)
+        .last_update(now)
+        .next_update(now + timedelta(days=7))
+    )
+
     for revoked_cert in revoked_certs:
         builder = builder.add_revoked_certificate(revoked_cert)
-    
+
     crl = builder.sign(private_key=issuer_key, algorithm=hashes.SHA256())
     return crl
 
+
 def revoke_certificate(inter_key, inter_cert, certificate_serial, reason=None):
     """Revoke a specific certificate and update CRL"""
-    # Load existing CRL
     crl_path = CRL_DIR / "intermediate.crl.pem"
     revoked_certs = []
-    
+
     if crl_path.exists():
         with open(crl_path, "rb") as f:
             existing_crl = x509.load_pem_x509_crl(f.read())
             revoked_certs = list(existing_crl)
-    
-    # Create new revoked certificate entry
-    revoked_cert_builder = x509.RevokedCertificateBuilder().serial_number(
-        certificate_serial
-    ).revocation_date(
-        datetime.datetime.utcnow()
+
+    revoked_cert_builder = (
+        x509.RevokedCertificateBuilder()
+        .serial_number(certificate_serial)
+        .revocation_date(datetime.now(timezone.utc))
     )
-    
+
     if reason:
         revoked_cert_builder = revoked_cert_builder.add_extension(
             x509.CRLReason(reason), critical=False
         )
-    
+
     revoked_cert = revoked_cert_builder.build()
-    
-    # Add to revoked list
     revoked_certs.append(revoked_cert)
-    
-    # Create new CRL
+
     new_crl = create_crl(inter_key, inter_cert, revoked_certs)
-    
-    # Save CRL
     with open(crl_path, "wb") as f:
         f.write(new_crl.public_bytes(serialization.Encoding.PEM))
-    
-    print(f" Certificate {certificate_serial} revoked and CRL updated")
+
+    print(f"✅ Certificate {certificate_serial} revoked and CRL updated")
     return new_crl
 
+
 def get_crl():
-    """
-    Load the current Certificate Revocation List
-    """
+    """Load current Certificate Revocation List"""
     try:
         crl_path = CRL_DIR / "intermediate.crl.pem"
         if not crl_path.exists():
             print("CRL file does not exist")
             return None
-            
+
         with open(crl_path, "rb") as f:
             crl_data = f.read()
             print(f"CRL file size: {len(crl_data)} bytes")
-            
-        # Try to load as CRL
-        crl = x509.load_pem_x509_crl(crl_data)
-        return crl
-        
+
+        return x509.load_pem_x509_crl(crl_data)
+
     except Exception as e:
         print(f"Error loading CRL: {e}")
         import traceback
-        print(f"Traceback: {traceback.format_exc()}")
+        print(traceback.format_exc())
         return None
-    
+
+
 def is_certificate_revoked(certificate_serial):
     """Check if a certificate is revoked"""
     crl = get_crl()
@@ -106,57 +102,54 @@ def is_certificate_revoked(certificate_serial):
                 return True
     return False
 
+
 # -----------------------------
 # Certificate Database for Rotation Tracking
 # -----------------------------
 CERT_DB_PATH = PKI_DIR / "certificate_database.json"
 
 def load_cert_database():
-    """Load certificate tracking database"""
     if CERT_DB_PATH.exists():
-        with open(CERT_DB_PATH, 'r') as f:
+        with open(CERT_DB_PATH, "r") as f:
             return json.load(f)
     return {"robots": {}, "servers": {}, "brokers": {}}
 
+
 def save_cert_database(db):
-    """Save certificate tracking database"""
-    with open(CERT_DB_PATH, 'w') as f:
+    with open(CERT_DB_PATH, "w") as f:
         json.dump(db, f, indent=2)
+
 
 def track_certificate(entity_type, entity_name, cert, cert_path):
     """Track certificate in database"""
     db = load_cert_database()
-    
+
     if entity_name not in db[entity_type]:
         db[entity_type][entity_name] = []
-    
+
+    expires_at = cert.not_valid_after_utc.replace(tzinfo=timezone.utc)
+
     cert_info = {
-        'serial_number': str(cert.serial_number),
-        'issued_at': datetime.datetime.utcnow().isoformat(),
-        'expires_at': cert.not_valid_after_utc.isoformat(),
-        'cert_path': str(cert_path),
-        'status': 'active'
+        "serial_number": str(cert.serial_number),
+        "issued_at": datetime.now(timezone.utc).isoformat(),
+        "expires_at": expires_at.isoformat(),
+        "cert_path": str(cert_path),
+        "status": "active",
     }
-    
-    # Mark previous certificates as inactive
+
     for old_cert in db[entity_type][entity_name]:
-        old_cert['status'] = 'inactive'
-    
+        old_cert["status"] = "inactive"
+
     db[entity_type][entity_name].append(cert_info)
     save_cert_database(db)
-    
     return cert_info
-
 # -----------------------------
 # Root CA (supports seconds)
 # -----------------------------
-def create_self_signed_root(common_name: str = "MyTestRootCA", key_size: int = 4096, validity_seconds: int = 3650*24*3600):
-    """
-    validity_seconds: lifetime of root CA in seconds
-    """
+def create_self_signed_root(common_name="MyTestRootCA", key_size=4096, validity_seconds=3650 * 24 * 3600):
     key = rsa.generate_private_key(public_exponent=65537, key_size=key_size)
     subject = issuer = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, common_name)])
-    now = datetime.datetime.utcnow()
+    now = datetime.now(timezone.utc)
 
     cert = (
         x509.CertificateBuilder()
@@ -164,200 +157,90 @@ def create_self_signed_root(common_name: str = "MyTestRootCA", key_size: int = 4
         .issuer_name(issuer)
         .public_key(key.public_key())
         .serial_number(x509.random_serial_number())
-        .not_valid_before(now - datetime.timedelta(seconds=60))  # small buffer
-        .not_valid_after(now + datetime.timedelta(seconds=validity_seconds))
+        .not_valid_before(now - timedelta(seconds=60))
+        .not_valid_after(now + timedelta(seconds=validity_seconds))
         .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
-        .add_extension(
-            x509.KeyUsage(
-                digital_signature=False,
-                content_commitment=False,
-                key_encipherment=False,
-                data_encipherment=False,
-                key_agreement=False,
-                key_cert_sign=True,
-                crl_sign=True,
-                encipher_only=False,
-                decipher_only=False
-            ),
-            critical=True
-        )
-        .add_extension(
-            x509.SubjectKeyIdentifier.from_public_key(key.public_key()),
-            critical=False
-        )
-        # Add CRL distribution point
-        .add_extension(
-            x509.CRLDistributionPoints([
-                x509.DistributionPoint(
-                    full_name=[x509.UniformResourceIdentifier("http://pki-server/crl/intermediate.crl")],
-                    relative_name=None,
-                    reasons=None,
-                    crl_issuer=None
-                )
-            ]),
-            critical=False
-        )
         .sign(private_key=key, algorithm=hashes.SHA256())
     )
 
-    # write files
     key_path = PKI_DIR / "rootCA.key.pem"
     crt_path = PKI_DIR / "rootCA.crt.pem"
     with open(key_path, "wb") as f:
         f.write(key.private_bytes(
             serialization.Encoding.PEM,
             serialization.PrivateFormat.TraditionalOpenSSL,
-            encryption_algorithm=serialization.NoEncryption()
+            serialization.NoEncryption()
         ))
     with open(crt_path, "wb") as f:
         f.write(cert.public_bytes(serialization.Encoding.PEM))
+
     print("Root CA created:", key_path, crt_path)
     return key, cert
 
-
 # -----------------------------
-# Intermediate CA (supports seconds)
+# Intermediate CA
 # -----------------------------
-def create_intermediate_ca(root_key, root_cert, common_name="MyIntermediateCA", key_size: int = 4096, validity_seconds: int = 1825*24*3600):
-    """
-    validity_seconds: lifetime of intermediate CA in seconds
-    """
+def create_intermediate_ca(root_key, root_cert, common_name="MyIntermediateCA", key_size=4096, validity_seconds=1825 * 24 * 3600):
     key = rsa.generate_private_key(public_exponent=65537, key_size=key_size)
     subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, common_name)])
-    now = datetime.datetime.utcnow()
+    now = datetime.now(timezone.utc)
 
-    builder = (
+    cert = (
         x509.CertificateBuilder()
         .subject_name(subject)
         .issuer_name(root_cert.subject)
         .public_key(key.public_key())
         .serial_number(x509.random_serial_number())
-        .not_valid_before(now - datetime.timedelta(seconds=60))  # small buffer
-        .not_valid_after(now + datetime.timedelta(seconds=validity_seconds))
+        .not_valid_before(now - timedelta(seconds=60))
+        .not_valid_after(now + timedelta(seconds=validity_seconds))
         .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
-        .add_extension(
-            x509.KeyUsage(
-                digital_signature=False,
-                content_commitment=False,
-                key_encipherment=False,
-                data_encipherment=False,
-                key_agreement=False,
-                key_cert_sign=True,
-                crl_sign=True,
-                encipher_only=False,
-                decipher_only=False
-            ),
-            critical=True
-        )
-        .add_extension(
-            x509.SubjectKeyIdentifier.from_public_key(key.public_key()),
-            critical=False
-        )
-        .add_extension(
-            x509.AuthorityKeyIdentifier.from_issuer_public_key(root_key.public_key()),
-            critical=False
-        )
-        # Add CRL distribution point
-        .add_extension(
-            x509.CRLDistributionPoints([
-                x509.DistributionPoint(
-                    full_name=[x509.UniformResourceIdentifier("http://pki-server/crl/intermediate.crl")],
-                    relative_name=None,
-                    reasons=None,
-                    crl_issuer=None
-                )
-            ]),
-            critical=False
-        )
+        .sign(private_key=root_key, algorithm=hashes.SHA256())
     )
 
-    cert = builder.sign(private_key=root_key, algorithm=hashes.SHA256())
-
-    # write files
     key_path = PKI_DIR / "intermediateCA.key.pem"
     crt_path = PKI_DIR / "intermediateCA.crt.pem"
     with open(key_path, "wb") as f:
         f.write(key.private_bytes(
             serialization.Encoding.PEM,
             serialization.PrivateFormat.TraditionalOpenSSL,
-            encryption_algorithm=serialization.NoEncryption()
+            serialization.NoEncryption()
         ))
     with open(crt_path, "wb") as f:
         f.write(cert.public_bytes(serialization.Encoding.PEM))
+
     print("Intermediate CA created:", key_path, crt_path)
-    
-    # Create initial empty CRL
-    initial_crl = create_crl(key, cert)
+
     crl_path = CRL_DIR / "intermediate.crl.pem"
+    crl = create_crl(key, cert)
     with open(crl_path, "wb") as f:
-        f.write(initial_crl.public_bytes(serialization.Encoding.PEM))
+        f.write(crl.public_bytes(serialization.Encoding.PEM))
+
     print("Initial CRL created at", crl_path)
-    
     return key, cert
 
 # -----------------------------
-# Sign CSR (Server / Client Certificate)
+# Sign CSR
 # -----------------------------
-def sign_csr(intermediate_key, intermediate_cert, csr_pem_bytes, validity_seconds=120, is_server_cert=True):
-    """Sign a CSR with the intermediate CA."""
-    csr = x509.load_pem_x509_csr(csr_pem_bytes)
-    if not csr.is_signature_valid:
-        raise ValueError("CSR signature invalid")
-
-    now = datetime.datetime.utcnow()
-    builder = (
+def sign_csr(issuer_key, issuer_cert, csr_pem, validity_seconds=3600):
+    csr = x509.load_pem_x509_csr(csr_pem)
+    cert_builder = (
         x509.CertificateBuilder()
         .subject_name(csr.subject)
-        .issuer_name(intermediate_cert.subject)
+        .issuer_name(issuer_cert.subject)
         .public_key(csr.public_key())
         .serial_number(x509.random_serial_number())
-        .not_valid_before(now - datetime.timedelta(seconds=10))
-        .not_valid_after(now + datetime.timedelta(seconds=validity_seconds))
-        .add_extension(
-            x509.BasicConstraints(ca=False, path_length=None),
-            critical=True
-        )
-        .add_extension(
-            x509.KeyUsage(
-                digital_signature=True,
-                key_encipherment=True,
-                content_commitment=False,
-                data_encipherment=False,
-                key_agreement=False,
-                key_cert_sign=False,
-                crl_sign=False,
-                encipher_only=False,
-                decipher_only=False
-            ),
-            critical=True
-        )
-        .add_extension(
-            x509.AuthorityKeyIdentifier.from_issuer_public_key(intermediate_key.public_key()),
-            critical=False
-        )
-        # ADD CRL DISTRIBUTION POINTS - THIS IS CRITICAL
-        .add_extension(
-            x509.CRLDistributionPoints([
-                x509.DistributionPoint(
-                    full_name=[x509.UniformResourceIdentifier("https://192.168.0.134:8443/app/pki/crl/intermediate.crl.pem")],
-                    relative_name=None,
-                    reasons=None,
-                    crl_issuer=None
-                )
-            ]),
-            critical=False
-        )
+        .not_valid_before(datetime.utcnow())
+        .not_valid_after(datetime.utcnow() + timedelta(seconds=validity_seconds))
     )
 
-    # Copy SAN if present in CSR
-    try:
-        san = csr.extensions.get_extension_for_class(x509.SubjectAlternativeName)
-        builder = builder.add_extension(san.value, critical=False)
-    except x509.ExtensionNotFound:
-        pass
+    # Copy extensions (e.g. SAN)
+    for ext in csr.extensions:
+        cert_builder = cert_builder.add_extension(ext.value, ext.critical)
 
-    cert = builder.sign(private_key=intermediate_key, algorithm=hashes.SHA256())
+    cert = cert_builder.sign(private_key=issuer_key, algorithm=hashes.SHA256())
     return cert
+
+
 # -----------------------------
 # Write certificate + full chain
 # -----------------------------
@@ -376,34 +259,48 @@ def write_cert_and_chain(cert, chain, out_cert_path: str):
 # -----------------------------
 # Certificate Validation and Monitoring
 # -----------------------------
-def validate_certificate(cert_path):
-    """Validate certificate expiry and revocation status"""
+def validate_certificate(cert_path: Path):
+    """
+    Validate certificate expiry and revocation status (via CRL)
+    """
     try:
+        # Load the certificate
         with open(cert_path, "rb") as f:
-            cert = x509.load_pem_x509_certificate(f.read())
-        
+            cert = x509.load_pem_x509_certificate(f.read(), default_backend())
+
         # Check expiry
-        now = datetime.datetime.utcnow()
-        if cert.not_valid_after < now:
+        now = datetime.now(timezone.utc)
+        if cert.not_valid_after_utc < now:
             return False, "Certificate has expired"
-        
-        # Check revocation
-        if is_certificate_revoked(cert.serial_number):
+
+        # Load CRL file
+        crl_path = CRL_DIR / "intermediate.crl.pem"
+        if not crl_path.exists():
+            return True, "CRL not found — assuming valid"
+
+        with open(crl_path, "rb") as f:
+            crl = x509.load_pem_x509_crl(f.read(), default_backend())
+
+        # Check if serial number is revoked
+        revoked_serials = [r.serial_number for r in crl]
+        if cert.serial_number in revoked_serials:
             return False, "Certificate is revoked"
-        
+
+        # Certificate is fine
         return True, "Certificate is valid"
-    
+
     except Exception as e:
         return False, f"Certificate validation failed: {str(e)}"
-
+    
+    
 def check_certificate_expiry(cert_path, days_before=30):
     """Check if certificate expires within specified days"""
     try:
         with open(cert_path, "rb") as f:
             cert = x509.load_pem_x509_certificate(f.read())
         
-        now = datetime.datetime.utcnow()
-        expiry_date = cert.not_valid_after
+        now = datetime.now(timezone.utc)
+        expiry_date = cert.not_valid_after_utc
         days_until_expiry = (expiry_date - now).days
         
         if days_until_expiry <= days_before:
@@ -425,8 +322,8 @@ def get_certificate_info(cert_path):
             'issuer': dict(cert.issuer),
             'serial_number': str(cert.serial_number),
             'not_valid_before': cert.not_valid_before.isoformat(),
-            'not_valid_after': cert.not_valid_after_utc.isoformat(),
-            'is_expired': cert.not_valid_after < datetime.datetime.utcnow(),
+            'not_valid_after_utc': cert.not_valid_after_utc.isoformat(),
+            'is_expired': cert.not_valid_after_utc < datetime.now(timezone.utc),
             'is_revoked': is_certificate_revoked(cert.serial_number)
         }
         
@@ -485,10 +382,7 @@ def check_all_certificates(days_before=30):
     
     return results
 
-# Add to ca/ca_manager.py
-
 def load_intermediate_ca():
-    """Load intermediate CA key and certificate"""
     try:
         with open(PKI_DIR / "intermediateCA.key.pem", "rb") as f:
             inter_key = serialization.load_pem_private_key(f.read(), password=None)
@@ -497,7 +391,6 @@ def load_intermediate_ca():
         return inter_key, inter_cert
     except Exception as e:
         raise Exception(f"Failed to load intermediate CA: {e}")
-
 # -----------------------------
 # Example CLI usage
 # -----------------------------
