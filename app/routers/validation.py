@@ -25,25 +25,38 @@ def verify_api_key(authorization: str = Depends(security)):
         raise HTTPException(status_code=401, detail="Invalid API key")
     return authorization.credentials
 
+
+
+
 @router.get("/certificate-status/{entity_name}")
-def get_certificate_info(cert_path):
+def get_certificate_info(entity_name: str):
     try:
+        cert_path = base_path / f"pki/{entity_name}.cert.pem"
+
+        if not os.path.exists(cert_path):
+            return {"error": f"Certificate not found for {entity_name}"}
+
         with open(cert_path, "rb") as f:
             cert_data = f.read()
 
         cert = x509.load_pem_x509_certificate(cert_data, default_backend())
 
         not_valid_before = cert.not_valid_before.replace(tzinfo=timezone.utc).isoformat()
-        not_valid_after_utc = cert.not_valid_after_utc.replace(tzinfo=timezone.utc).isoformat()
+        not_valid_after = cert.not_valid_after.replace(tzinfo=timezone.utc).isoformat()
 
         subject = {attr.oid._name: attr.value for attr in cert.subject}
         issuer = {attr.oid._name: attr.value for attr in cert.issuer}
+
+        # ✅ Properly check expiry using timezone-aware comparison
+        now_utc = datetime.now(timezone.utc)
+        is_expired = now_utc > cert.not_valid_after.replace(tzinfo=timezone.utc)
 
         return {
             "subject": subject,
             "issuer": issuer,
             "not_valid_before": not_valid_before,
-            "not_valid_after_utc": not_valid_after_utc,
+            "not_valid_after": not_valid_after,
+            "is_expired": is_expired,
             "is_revoked": False,
         }
 
