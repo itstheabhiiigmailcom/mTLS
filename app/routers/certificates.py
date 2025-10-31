@@ -46,8 +46,6 @@ async def renew_certificate(
         if not all([robot_id, csr_pem]):
             raise HTTPException(400, "Missing required fields: robot_id and csr")
         
-        logger.info(f"Certificate renewal requested for robot: {robot_id}")
-        
         # Load intermediate CA
         inter_key, inter_cert = load_intermediate_ca()
         

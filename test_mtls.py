@@ -1,4 +1,6 @@
 import paho.mqtt.client as mqtt
+import time
+
 
 def test_mqtt_security():
     print("Testing MQTT Broker mTLS Security...")
@@ -11,7 +13,6 @@ def test_mqtt_security():
         # Try to connect without any TLS setup
         client1.connect("192.168.0.222", 8883, 5)
         client1.loop_start()
-        import time
         time.sleep(2)
         if client1.is_connected():
             print("INSECURE: Connected without TLS!")
@@ -45,10 +46,6 @@ def test_mqtt_security():
     
     print("\n" + "-" * 50)
     
-    # Test 3: With full mTLS (should WORK if you had certs on Windows)
-    print("3. Testing WITH full mTLS (client certificates)...")
-    print("   [This would work if certificates were available on Windows]")
-    print("   Your server-side tests prove mTLS is working!")
 
 if __name__ == "__main__":
     test_mqtt_security()
